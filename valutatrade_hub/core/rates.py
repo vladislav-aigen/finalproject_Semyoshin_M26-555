@@ -20,7 +20,7 @@ class RateService:
     def __init__(self, auto_refresh=True):
         self.auto_refresh = auto_refresh
         self.db = DatabaseManager()
-        self._cache = create_cacher(30)
+        self._cache = create_cacher(SettingsLoader().get("snapshot_cache_seconds"))
 
     def get_rate(self, from_code: str, to_code: str) -> dict:
         """При отсутствии свежего курса один раз обновить его через парсер."""
@@ -35,7 +35,7 @@ class RateService:
 
         try:
             make_updater().run_update()
-            self._cache = create_cacher(30)
+            self._cache = create_cacher(SettingsLoader().get("snapshot_cache_seconds"))
             return self._from_cache(from_code, to_code)
         except ApiRequestError as error:
             raise ApiRequestError(
@@ -50,36 +50,51 @@ class RateService:
         if from_code == to_code:
             return {"rate": 1.0, "updated_at": utc_now(), "source": "Identity"}
         path = self.db.path("rates.json")
-        key = (path, path.stat().st_mtime_ns if path.exists() else None)
-        snapshot = self._cache(key, lambda: self.db.read("rates.json", {}))
+        with self.db.lock:
+            stat = path.stat() if path.exists() else None
+            key = (
+                path,
+                (stat.st_ino, stat.st_size, stat.st_mtime_ns) if stat else None,
+            )
+            snapshot = self._cache(key, lambda: self.db.read("rates.json", {}))
         pairs = snapshot.get("pairs", snapshot)
         now = datetime.now(UTC)
         ttl = SettingsLoader().get("rates_ttl_seconds")
+        clock_skew = SettingsLoader().get("max_clock_skew_seconds")
+        errors = []
 
         def direct(left, right):
             if left == right:
                 return {"rate": 1.0, "updated_at": utc_now(), "source": "Identity"}
-            inverse = f"{left}_{right}" not in pairs
-            pair = f"{right}_{left}" if inverse else f"{left}_{right}"
-            record = pairs.get(pair)
-            if not record:
-                return None
-            try:
-                value = positive_number(record["rate"], "rate")
+            candidates = []
+            for pair, inverse in (
+                (f"{left}_{right}", False),
+                (f"{right}_{left}", True),
+            ):
+                record = pairs.get(pair)
+                if not record:
+                    continue
+                value = record["rate"]
                 timestamp = parse_timestamp(record["updated_at"])
                 age = (now - timestamp).total_seconds()
-                if age < -60 or age > ttl:
-                    raise ApiRequestError(
-                        f"Курс {pair} устарел или имеет неверную дату. "
-                        "Выполните update-rates"
-                    )
-                return {
-                    "rate": 1 / value if inverse else value,
-                    "updated_at": record["updated_at"],
-                    "source": record.get("source", "cache"),
-                }
-            except (KeyError, ValueError, TypeError, AttributeError) as error:
-                raise ApiRequestError(f"Некорректный курс {pair}") from error
+                if age < -clock_skew or age > ttl:
+                    errors.append(f"Курс {pair} устарел или имеет неверную дату")
+                    continue
+                try:
+                    value = positive_number(1 / value if inverse else value, "rate")
+                except (ValueError, OverflowError):
+                    errors.append(f"Некорректный курс {pair}")
+                    continue
+                candidates.append(
+                    {
+                        "rate": value,
+                        "updated_at": record["updated_at"],
+                        "source": record.get("source", "cache"),
+                    }
+                )
+            return max(
+                candidates, key=lambda r: parse_timestamp(r["updated_at"]), default=None
+            )
 
         result = direct(from_code, to_code)
         if result is None:
@@ -94,7 +109,11 @@ class RateService:
                 }
         if result is None:
             raise ApiRequestError(
-                f"Курс {from_code}→{to_code} недоступен. Выполните update-rates"
+                f"Курс {from_code}→{to_code} недоступен. Выполните update-rates. "
+                + "; ".join(dict.fromkeys(errors))
             )
-        positive_number(result["rate"], "rate")
+        try:
+            positive_number(result["rate"], "rate")
+        except (ValueError, OverflowError) as error:
+            raise ApiRequestError("Расчётный курс вне допустимого диапазона") from error
         return result

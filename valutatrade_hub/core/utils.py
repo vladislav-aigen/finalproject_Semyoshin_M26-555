@@ -22,6 +22,8 @@ def utc_now() -> str:
 
 def parse_timestamp(value: str) -> datetime:
     """Разобрать ISO-дату; старые даты без часового пояса считать UTC."""
+    if not isinstance(value, str):
+        raise ValueError("Дата должна быть строкой ISO 8601")
     result = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return result.replace(tzinfo=UTC) if result.tzinfo is None else result
 

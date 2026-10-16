@@ -5,6 +5,7 @@ import hmac
 import math
 import secrets
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from valutatrade_hub.core.currencies import get_currency
 from valutatrade_hub.core.exceptions import InsufficientFundsError
@@ -118,14 +119,15 @@ class Wallet:
 
     def deposit(self, amount: float):
         """Зачислить положительную сумму."""
-        self.balance += positive_number(amount)
+        amount = positive_number(amount)
+        self.balance = float(Decimal(str(self.balance)) + Decimal(str(amount)))
 
     def withdraw(self, amount: float):
         """Списать сумму, если средств достаточно."""
         amount = positive_number(amount)
         if amount > self.balance:
             raise InsufficientFundsError(self.balance, amount, self.currency_code)
-        self.balance -= amount
+        self.balance = float(Decimal(str(self.balance)) - Decimal(str(amount)))
 
     def get_balance_info(self) -> str:
         """Отформатировать остаток и код валюты."""
@@ -136,6 +138,8 @@ class Portfolio:
     """Кошельки одного пользователя и оценка стоимости портфеля."""
 
     def __init__(self, user_id: int, wallets=None, user=None, rate_provider=None):
+        if user is not None and user.user_id != user_id:
+            raise ValueError("Пользователь не совпадает с владельцем портфеля")
         self._user_id = user_id
         self._user = user
         self._wallets = dict(wallets or {})
@@ -144,6 +148,14 @@ class Portfolio:
     @property
     def user(self):
         """Пользователь портфеля, только для чтения."""
+        if self._user is None:
+            from valutatrade_hub.infra.database import DatabaseManager
+
+            users = DatabaseManager().read("users.json", [])
+            row = next((u for u in users if u["user_id"] == self._user_id), None)
+            if row is None:
+                raise ValueError("Пользователь портфеля не найден")
+            self._user = User(**row)
         return self._user
 
     @property
