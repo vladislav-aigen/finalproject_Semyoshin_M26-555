@@ -12,6 +12,7 @@ from valutatrade_hub.core.currencies import CURRENCIES
 from valutatrade_hub.core.exceptions import CurrencyNotFoundError, ValutaTradeError
 from valutatrade_hub.core.usecases import WalletService
 from valutatrade_hub.decorators import confirm_action
+from valutatrade_hub.infra.settings import SettingsLoader
 from valutatrade_hub.logging_config import parser_console_logging, setup_logging
 from valutatrade_hub.parser_service.updater import make_updater
 
@@ -26,6 +27,7 @@ class CommandParser(argparse.ArgumentParser):
 
 def make_parser() -> CommandParser:
     """Описать команды и их аргументы."""
+    base = SettingsLoader().get("base_currency")
     parser = CommandParser(prog="valutatrade", description="ValutaTrade Hub")
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command")
@@ -34,7 +36,7 @@ def make_parser() -> CommandParser:
         sub.add_argument("--username", required=True)
         sub.add_argument("--password", help="Если не указан, запрашивается скрыто")
     sub = commands.add_parser("show-portfolio")
-    sub.add_argument("--base", default="USD")
+    sub.add_argument("--base", default=base)
     for command in ("buy", "sell"):
         sub = commands.add_parser(command)
         sub.add_argument("--currency", required=True)
@@ -49,7 +51,7 @@ def make_parser() -> CommandParser:
     sub = commands.add_parser("show-rates")
     sub.add_argument("--currency")
     sub.add_argument("--top", type=int)
-    sub.add_argument("--base", default="USD")
+    sub.add_argument("--base", default=base)
     for command in ("logout", "currencies", "help", "exit", "quit"):
         commands.add_parser(command)
     return parser
