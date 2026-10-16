@@ -1,0 +1,39 @@
+[project]
+name = "finalproject_Semyoshin_M26-555"
+version = "0.1.0"
+description = "Консольный симулятор валютного кошелька ValutaTrade Hub"
+readme = "README.md"
+authors = [{name = "Семёшин, М26-555"}]
+requires-python = ">=3.12"
+dependencies = ["prettytable>=3.12,<4", "requests>=2.32,<3"]
+
+[project.scripts]
+valutatrade = "valutatrade_hub.cli.interface:main"
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "valutatrade_hub"
+module-root = ""
+
+[dependency-groups]
+dev = ["ruff>=0.9,<1", "pytest>=8,<10"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.valutatrade]
+data_dir = "data"
+logs_dir = "logs"
+rates_ttl_seconds = 300
+base_currency = "USD"
+log_level = "INFO"
