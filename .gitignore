@@ -14,3 +14,5 @@ logs/
 !.env.example
 .DS_Store
 *.tmp
+*.lock
+!uv.lock
