@@ -4,10 +4,11 @@ import copy
 import json
 import os
 import tempfile
-import threading
 from pathlib import Path
 
-from valutatrade_hub.core.exceptions import StorageError
+from valutatrade_hub.core.exceptions import StorageError, ValutaTradeError
+from valutatrade_hub.infra.locking import DatabaseLock
+from valutatrade_hub.infra.schema import validate_document
 from valutatrade_hub.infra.settings import SettingsLoader
 
 
@@ -19,7 +20,9 @@ class DatabaseManager:
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._instance.lock = threading.RLock()
+            cls._instance.lock = DatabaseLock(
+                lambda: cls._instance.path(".database.lock")
+            )
         return cls._instance
 
     def path(self, name: str) -> Path:
@@ -37,11 +40,23 @@ class DatabaseManager:
                     value = json.load(stream)
                 if not isinstance(value, type(default)):
                     raise ValueError("Неверный тип корневого объекта")
+                validate_document(name, value)
                 return value
             except FileNotFoundError:
                 return copy.deepcopy(default)
-            except (OSError, ValueError) as error:
-                raise StorageError(f"Не удалось прочитать {name}") from error
+            except (
+                OSError,
+                ValueError,
+                KeyError,
+                TypeError,
+                OverflowError,
+                ValutaTradeError,
+            ) as error:
+                raise StorageError(
+                    f"Не удалось прочитать {name}: "
+                    "проверьте доступ и структуру данных. "
+                    "Файл не изменён."
+                ) from error
 
     def write(self, name: str, data):
         """Записать временный файл, затем атомарно заменить целевой."""

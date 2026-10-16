@@ -20,6 +20,7 @@ class BaseApiClient(ABC):
     def __init__(self, config=None):
         self.config = config or ParserConfig()
         self.updated_at = None
+        self.updated_at_by_pair = {}
 
     @abstractmethod
     def fetch_rates(self) -> dict:
@@ -62,6 +63,7 @@ class CoinGeckoClient(BaseApiClient):
     source = "CoinGecko"
 
     def fetch_rates(self) -> dict:
+        """Получить цены к USD и сохранить время каждой криптовалюты отдельно."""
         config = self.config
         headers = {}
         if config.COINGECKO_API_KEY:
@@ -84,16 +86,18 @@ class CoinGeckoClient(BaseApiClient):
                 )
                 for code in config.CRYPTO_CURRENCIES
             }
-            timestamps = [
-                data[config.CRYPTO_ID_MAP[c]].get("last_updated_at")
-                for c in config.CRYPTO_CURRENCIES
-            ]
-            valid = [value for value in timestamps if value is not None]
-            self.updated_at = (
-                datetime.fromtimestamp(min(valid), UTC).isoformat()
-                if valid
-                else utc_now()
-            )
+            self.updated_at_by_pair = {}
+            received_at = utc_now()
+            for code in config.CRYPTO_CURRENCIES:
+                timestamp = data[config.CRYPTO_ID_MAP[code]].get("last_updated_at")
+                self.updated_at_by_pair[f"{code}_USD"] = (
+                    datetime.fromtimestamp(
+                        positive_number(timestamp, "timestamp"), UTC
+                    ).isoformat()
+                    if timestamp is not None
+                    else received_at
+                )
+            self.updated_at = min(self.updated_at_by_pair.values(), default=received_at)
             return result
         except (KeyError, TypeError, ValueError, OverflowError) as error:
             raise ApiRequestError(
@@ -107,6 +111,7 @@ class ExchangeRateApiClient(BaseApiClient):
     source = "ExchangeRate-API"
 
     def fetch_rates(self) -> dict:
+        """Перевести котировки базовой валюты API в пары «валюта → USD»."""
         config = self.config
         if not config.EXCHANGERATE_API_KEY:
             raise ApiRequestError("Задайте переменную EXCHANGERATE_API_KEY")
@@ -120,17 +125,23 @@ class ExchangeRateApiClient(BaseApiClient):
             if data.get("base_code") != config.BASE_CURRENCY:
                 raise ValueError("Неожиданная базовая валюта")
             rates = data.get("conversion_rates", data.get("rates", {}))
+            if not isinstance(rates, dict):
+                raise ValueError("conversion_rates должен быть объектом")
             usd = positive_number(
                 rates.get("USD", 1) if config.BASE_CURRENCY == "USD" else rates["USD"],
                 "rate",
             )
             result = {
-                f"{code}_USD": usd / positive_number(rates[code], "rate")
+                f"{code}_USD": positive_number(
+                    usd / positive_number(rates[code], "rate"), "rate"
+                )
                 for code in config.FIAT_CURRENCIES
             }
             timestamp = data.get("time_last_update_unix")
             self.updated_at = (
-                datetime.fromtimestamp(timestamp, UTC).isoformat()
+                datetime.fromtimestamp(
+                    positive_number(timestamp, "timestamp"), UTC
+                ).isoformat()
                 if timestamp is not None
                 else utc_now()
             )

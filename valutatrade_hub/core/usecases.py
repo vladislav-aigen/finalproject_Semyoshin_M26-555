@@ -1,12 +1,13 @@
 """Регистрация, сессия, сделки и представление портфеля."""
 
 from valutatrade_hub.core.currencies import CryptoCurrency, get_currency
-from valutatrade_hub.core.exceptions import ValutaTradeError
+from valutatrade_hub.core.exceptions import InsufficientFundsError, ValutaTradeError
 from valutatrade_hub.core.models import Portfolio, User, Wallet
 from valutatrade_hub.core.rates import RateService
 from valutatrade_hub.core.utils import positive_number
 from valutatrade_hub.decorators import log_action
 from valutatrade_hub.infra.database import DatabaseManager
+from valutatrade_hub.infra.settings import SettingsLoader
 
 
 class WalletService:
@@ -19,6 +20,8 @@ class WalletService:
 
     def register(self, username: str, password: str) -> User:
         """Записать пользователя и пустой портфель."""
+        if not isinstance(username, str) or not username.strip():
+            raise ValueError("Имя не может быть пустым")
         with self.db.lock:
             users = self.db.read("users.json", [])
             if any(row["username"] == username.strip() for row in users):
@@ -85,6 +88,14 @@ class WalletService:
         self._require_user()
         get_currency(currency_code)
         amount = positive_number(amount)
+        if action == "SELL":
+            # Ошибки баланса проверяем до сети; под блокировкой проверим повторно.
+            _, _, portfolio = self._load_portfolio()
+            wallet = portfolio.get_wallet(currency_code)
+            if wallet is None:
+                raise ValueError(f"У вас нет кошелька '{currency_code}'")
+            if amount > wallet.balance:
+                raise InsufficientFundsError(wallet.balance, amount, currency_code)
         rate = self.rates.get_rate(currency_code, "USD")["rate"]
         value = positive_number(amount * rate)
         with self.db.lock:
@@ -112,8 +123,9 @@ class WalletService:
             self.db.write("portfolios.json", records)
             return result
 
-    def show_portfolio(self, base="USD") -> dict:
+    def show_portfolio(self, base=None) -> dict:
         """Подготовить балансы и суммарную стоимость для интерфейса."""
+        base = base if base is not None else SettingsLoader().get("base_currency")
         get_currency(base)
         _, _, portfolio = self._load_portfolio()
         rows = []
@@ -127,8 +139,9 @@ class WalletService:
             "total": sum(row[2] for row in rows),
         }
 
-    def show_rates(self, currency=None, top=None, base="USD") -> dict:
+    def show_rates(self, currency=None, top=None, base=None) -> dict:
         """Отобрать курсы и вернуть строки таблицы с диагностикой."""
+        base = base if base is not None else SettingsLoader().get("base_currency")
         get_currency(base)
         if currency:
             get_currency(currency)

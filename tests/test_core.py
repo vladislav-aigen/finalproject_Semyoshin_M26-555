@@ -178,12 +178,12 @@ def test_singletons_and_corrupted_json():
 
 def test_atomic_write_preserves_previous_file():
     db = DatabaseManager()
-    db.write("users.json", [{"user_id": 1}])
+    db.write("sample.json", [{"user_id": 1}])
     with patch("valutatrade_hub.infra.database.os.replace", side_effect=OSError):
         with pytest.raises(StorageError):
-            db.write("users.json", [{"user_id": 2}])
-    assert db.read("users.json", []) == [{"user_id": 1}]
-    assert not list(db.path("users.json").parent.glob("*.tmp"))
+            db.write("sample.json", [{"user_id": 2}])
+    assert db.read("sample.json", []) == [{"user_id": 1}]
+    assert not list(db.path("sample.json").parent.glob("*.tmp"))
 
 
 def test_expired_rate_auto_refreshes():

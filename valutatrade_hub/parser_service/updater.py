@@ -1,9 +1,12 @@
 """Координация клиентов и отказоустойчивое обновление курсов."""
 
 import logging
+from datetime import UTC, datetime
 
-from valutatrade_hub.core.exceptions import ApiRequestError
-from valutatrade_hub.core.utils import positive_number, utc_now
+from valutatrade_hub.core.exceptions import ApiRequestError, CurrencyNotFoundError
+from valutatrade_hub.core.utils import parse_timestamp, positive_number, utc_now
+from valutatrade_hub.infra.schema import validate_rate_record
+from valutatrade_hub.infra.settings import SettingsLoader
 from valutatrade_hub.parser_service.api_clients import (
     CoinGeckoClient,
     DemoClient,
@@ -27,21 +30,47 @@ class RatesUpdater:
         for client in self.clients:
             try:
                 rates = client.fetch_rates()
-                if not rates:
+                if not isinstance(rates, dict) or not rates:
                     raise ApiRequestError(f"{client.source}: пустой ответ")
+                timestamps = getattr(client, "updated_at_by_pair", {})
+                if not isinstance(timestamps, dict):
+                    timestamps = {}
                 batch = {
                     pair: {
                         "rate": positive_number(rate, "rate"),
-                        "updated_at": client.updated_at or utc_now(),
+                        "updated_at": timestamps.get(pair)
+                        or client.updated_at
+                        or utc_now(),
                         "source": client.source,
                     }
                     for pair, rate in rates.items()
                 }
-                updates.update(batch)
+                # Сначала проверяем весь ответ, чтобы плохой источник не успел
+                # заменить корректные данные уже опрошенных клиентов.
+                for pair, record in batch.items():
+                    validate_rate_record(pair, record)
+                    ahead = (
+                        parse_timestamp(record["updated_at"]) - datetime.now(UTC)
+                    ).total_seconds()
+                    if ahead > SettingsLoader().get("max_clock_skew_seconds"):
+                        raise ValueError("Дата котировки находится в будущем")
+                for pair, record in batch.items():
+                    if pair not in updates or parse_timestamp(
+                        record["updated_at"]
+                    ) > parse_timestamp(updates[pair]["updated_at"]):
+                        updates[pair] = record
                 logger.info("%s: OK (%s rates)", client.source, len(batch))
-            except (ApiRequestError, ValueError) as error:
-                errors.append(str(error))
-                logger.error("%s", error)
+            except (
+                ApiRequestError,
+                CurrencyNotFoundError,
+                ValueError,
+                TypeError,
+                KeyError,
+                OverflowError,
+            ) as error:
+                message = f"{client.source}: {error}"
+                errors.append(message)
+                logger.error("%s", message)
                 logger.debug("Source failure: %s", client.source, exc_info=True)
         if not updates:
             logger.error("Update failed: no rates received")
